@@ -7,8 +7,8 @@ const feedbackSurveyController = require('../controllers/feedbackController');
 // Route to handle feedback submission
 router.post('/', feedbackSurveyController.handleFeedback); // Submit Feedback (POST)
 
-// Route to get services requested by a specific tenant (GET by tenantId)
-router.get('/:tenantId', feedbackSurveyController.getServicesByTenant); // Get services requested by tenant
+// Route to get services requested by a specific student (GET by studentId)
+router.get('/:studentId', feedbackSurveyController.getServicesBystudent); // Get services requested by student
 
 // Admin routes
 router.get('/', feedbackSurveyController.getAllFeedbacks); // Get all feedbacks (admin)

@@ -9,6 +9,12 @@ const surveyRoutes = require('./routes/survey');
 const formsRoutes = require('./routes/forms');
 const dashboardRoutes = require('./routes/dash');
 const reportRoutes = require('./routes/report');
+const courseRoutes = require('./routes/course');
+const batchRoutes = require('./routes/batch');
+const enrollmentRoutes = require('./routes/enrollment');
+const attendanceRoutes = require('./routes/attendance');
+const CommunityForumRoutes = require('./routes/Communication Forum');
+const AdminPostRoutes = require('./routes/AdminPost');
 
 const app = express();
 const PORT = 3000;
@@ -26,6 +32,12 @@ app.use('/api/feedback', feedbackRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/survey', surveyRoutes);
+app.use('/api/courses', courseRoutes);
+app.use('/api/batches', batchRoutes);
+app.use('/api/enrollments', enrollmentRoutes);
+app.use('/api/attendance', attendanceRoutes);
+app.use('/api/', CommunityForumRoutes);
+app.use('/api/admin', AdminPostRoutes);
 
 // Start the server
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

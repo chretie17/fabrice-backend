@@ -35,12 +35,12 @@ router.get('/questions', surveyController.getAllQuestionsWithSurveys);
 router.get('/responses', surveyController.getAllSurveysAndResponses);
 
 
-// ===================== Tenant Routes =====================
+// ===================== student Routes =====================
 
-// Tenant: Get available surveys (active surveys)
-router.get('/tenant/available', surveyController.getAvailableSurveys); // Get available surveys
+// student: Get available surveys (active surveys)
+router.get('/student/available', surveyController.getAvailableSurveys); // Get available surveys
 
-// Tenant: Submit responses to a survey
-router.post('/tenant/response', surveyController.submitSurveyResponses); // Submit responses
+// student: Submit responses to a survey
+router.post('/student/response', surveyController.submitSurveyResponses); // Submit responses
 
 module.exports = router;

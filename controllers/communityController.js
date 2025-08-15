@@ -1,223 +1,193 @@
 const db = require('../db');
 
-// Create a new post (Pending by default)
-exports.createPost = (req, res) => {
-    const { tenant_id, title, content, floors } = req.body;
-
-    if (!title || !content) {
-        return res.status(400).json({ error: 'Title and content are required.' });
-    }
-
-    const query = `INSERT INTO posts (tenant_id, title, content, floors, status) VALUES (?, ?, ?, ?, 'Pending')`;
-    db.query(query, [tenant_id, title, content, floors || null], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.status(201).json({ message: 'Post submitted for approval', postId: result.insertId });
-    });
-};
-
-// Get all approved posts
-// Get all approved posts
-exports.getAllPosts = (req, res) => {
-    const { floor, search } = req.query;
-
-    let query = `
-        SELECT p.*, u.name AS tenant_name 
-        FROM posts p 
-        JOIN users u ON p.tenant_id = u.id 
-        WHERE p.status = 'Approved'
-    `;
-
-    const params = [];
-
-    // Apply floor filter
-    if (floor) {
-        query += ' AND (p.floors = ? OR p.floors = "All Floors")';
-        params.push(floor);
-    }
-
-    // Apply search filter
-    if (search) {
-        query += ' AND (p.title LIKE ? OR p.content LIKE ?)';
-        const searchParam = `%${search}%`;
-        params.push(searchParam, searchParam);
-    }
-
-    query += ' ORDER BY p.created_at DESC';
-
-    db.query(query, params, (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(results);
-    });
-};
-// Like or Unlike a Comment
-exports.likeComment = (req, res) => {
-    const { comment_id, tenant_id } = req.body;
-
-    if (!comment_id || !tenant_id) {
-        return res.status(400).json({ error: 'Comment ID and Tenant ID are required.' });
-    }
-
+// Get all forum topics
+exports.getForumTopics = (req, res) => {
     const query = `
-        INSERT INTO comment_likes (comment_id, tenant_id)
-        VALUES (?, ?)
-        ON DUPLICATE KEY UPDATE liked_at = CURRENT_TIMESTAMP
+        SELECT 
+            ft.*, 
+            u.name as creator_name,
+            COUNT(fp.id) as post_count,
+            MAX(fp.created_at) as last_post_date
+        FROM 
+            forum_topics ft
+        JOIN 
+            users u ON ft.created_by = u.id
+        LEFT JOIN 
+            forum_posts fp ON ft.id = fp.topic_id
+        WHERE 
+            ft.status = 'active'
+        GROUP BY 
+            ft.id
+        ORDER BY 
+            last_post_date DESC
     `;
-
-    db.query(query, [comment_id, tenant_id], (err, result) => {
-        if (err) {
-            console.error('Error liking comment:', err);
-            return res.status(500).json({ error: 'Error liking comment.' });
-        }
-
-        const affectedRows = result.affectedRows;
-        const message = affectedRows === 1
-            ? 'Comment liked successfully.'
-            : 'Comment like updated successfully.';
-
-        res.status(201).json({ message });
-    });
-};
-
-// Get Likes for a Comment
-exports.getLikesForComment = (req, res) => {
-    const { comment_id } = req.params;
-
-    if (!comment_id) {
-        return res.status(400).json({ error: 'Comment ID is required.' });
-    }
-
-    const query = `
-        SELECT COUNT(*) AS like_count
-        FROM comment_likes
-        WHERE comment_id = ?
-    `;
-
-    db.query(query, [comment_id], (err, results) => {
-        if (err) {
-            console.error('Error fetching likes for comment:', err);
-            return res.status(500).json({ error: 'Error fetching likes for comment.' });
-        }
-
-        const likeCount = results[0]?.like_count || 0;
-        res.json({ comment_id, like_count: likeCount });
-    });
-};
-
-// Get pending posts for admin review
-exports.getPendingPosts = (req, res) => {
-    const query = `
-        SELECT p.*, u.name AS tenant_name 
-        FROM posts p 
-        JOIN users u ON p.tenant_id = u.id 
-        WHERE p.status = 'Pending'
-        ORDER BY p.created_at DESC
-    `;
+    
     db.query(query, (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(results);
     });
 };
 
-// Approve or reject a post
-exports.updatePostStatus = (req, res) => {
-    const { post_id, status } = req.body;
-
-    if (!['Approved', 'Rejected'].includes(status)) {
-        return res.status(400).json({ error: 'Invalid status value.' });
-    }
-
-    const query = `UPDATE posts SET status = ? WHERE id = ?`;
-    db.query(query, [status, post_id], (err, result) => {
+// Get a specific forum topic with its posts
+exports.getForumTopic = (req, res) => {
+    const { id } = req.params;
+    
+    const topicQuery = `
+        SELECT 
+            ft.*, 
+            u.name as creator_name
+        FROM 
+            forum_topics ft
+        JOIN 
+            users u ON ft.created_by = u.id
+        WHERE 
+            ft.id = ?
+    `;
+    
+    const postsQuery = `
+    SELECT 
+        fp.*,
+        u.name as user_name,
+        (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = fp.id AND pl.like_type = 'like') as likes,
+        (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = fp.id AND pl.like_type = 'dislike') as dislikes
+    FROM 
+        forum_posts fp
+    JOIN 
+        users u ON fp.user_id = u.id
+    WHERE 
+        fp.topic_id = ?
+    ORDER BY 
+        fp.created_at ASC
+`;
+    
+    db.query(topicQuery, [id], (err, topicResults) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: `Post ${status.toLowerCase()} successfully.` });
-    });
-};
-
-// Get a specific post with its comments (Only approved posts are visible)
-exports.getPostWithComments = (req, res) => {
-    const { post_id } = req.params;
-
-    const postQuery = `
-        SELECT p.*, u.name AS tenant_name 
-        FROM posts p 
-        JOIN users u ON p.tenant_id = u.id 
-        WHERE p.id = ? AND p.status = 'Approved'
-    `;
-
-    const commentsQuery = `
-        SELECT c.*, u.name AS tenant_name 
-        FROM comments c 
-        JOIN users u ON c.tenant_id = u.id 
-        WHERE c.post_id = ? 
-        ORDER BY c.created_at ASC
-    `;
-
-    db.query(postQuery, [post_id], (postErr, postResults) => {
-        if (postErr) return res.status(500).json({ error: postErr.message });
-        if (postResults.length === 0) return res.status(404).json({ error: 'Post not found or not approved.' });
-
-        db.query(commentsQuery, [post_id], (commentErr, commentResults) => {
-            if (commentErr) return res.status(500).json({ error: commentErr.message });
-
+        
+        if (topicResults.length === 0) {
+            return res.status(404).json({ error: 'Topic not found' });
+        }
+        
+        const topic = topicResults[0];
+        
+        db.query(postsQuery, [id], (err, postsResults) => {
+            if (err) return res.status(500).json({ error: err.message });
+            
             res.json({
-                post: postResults[0],
-                comments: commentResults,
+                ...topic,
+                posts: postsResults
             });
         });
     });
 };
 
-// Get comments for a specific post
-exports.getCommentsByPostId = (req, res) => {
-    const { post_id } = req.params;
-
+// Create a new forum topic
+exports.createForumTopic = (req, res) => {
+    const { title, description, created_by } = req.body;
+    
+    if (!title || !created_by) {
+        return res.status(400).json({ error: 'Title and user ID are required' });
+    }
+    
     const query = `
-        SELECT c.*, u.name AS tenant_name 
-        FROM comments c 
-        JOIN users u ON c.tenant_id = u.id 
-        WHERE c.post_id = ? 
-        ORDER BY c.created_at ASC
+        INSERT INTO forum_topics (title, description, created_by)
+        VALUES (?, ?, ?)
     `;
+    
+    db.query(query, [title, description || null, created_by], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        res.status(201).json({ 
+            message: 'Forum topic created successfully',
+            topic_id: result.insertId
+        });
+    });
+};
 
-    db.query(query, [post_id], (err, results) => {
+// Add a post to a forum topic
+exports.createForumPost = (req, res) => {
+    const { topic_id, user_id, content } = req.body;
+    
+    if (!topic_id || !user_id || !content) {
+        return res.status(400).json({ error: 'Topic ID, user ID, and content are required' });
+    }
+    
+    const query = `
+        INSERT INTO forum_posts (topic_id, user_id, content)
+        VALUES (?, ?, ?)
+    `;
+    
+    db.query(query, [topic_id, user_id, content], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        res.status(201).json({ 
+            message: 'Post added successfully',
+            post_id: result.insertId
+        });
+    });
+};
+
+// Get all success stories
+exports.getSuccessStories = (req, res) => {
+    const query = `
+        SELECT 
+            ss.*,
+            CASE WHEN ss.is_anonymous THEN 'Anonymous' ELSE u.name END as author_name
+        FROM 
+            success_stories ss
+        JOIN 
+            users u ON ss.user_id = u.id
+        WHERE 
+            ss.is_approved = true
+        ORDER BY 
+            ss.created_at DESC
+    `;
+    
+    db.query(query, (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(results);
     });
 };
 
-// Create a comment on a post
-exports.createComment = (req, res) => {
-    const { post_id, tenant_id, content } = req.body;
-
-    if (!content) {
-        return res.status(400).json({ error: 'Content is required.' });
+// Submit a success story
+exports.submitSuccessStory = (req, res) => {
+    const { user_id, title, content, is_anonymous } = req.body;
+    
+    if (!user_id || !title || !content) {
+        return res.status(400).json({ error: 'User ID, title, and content are required' });
     }
-
-    const query = `INSERT INTO comments (post_id, tenant_id, content) VALUES (?, ?, ?)`;
-    db.query(query, [post_id, tenant_id, content], (err, result) => {
+    
+    const query = `
+        INSERT INTO success_stories (user_id, title, content, is_anonymous)
+        VALUES (?, ?, ?, ?)
+    `;
+    
+    db.query(query, [user_id, title, content, is_anonymous || false], (err, result) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.status(201).json({ message: 'Comment added successfully', commentId: result.insertId });
+        
+        res.status(201).json({ 
+            message: 'Success story submitted successfully. It will be visible after approval.',
+            story_id: result.insertId
+        });
     });
 };
 
-// Delete a post
-exports.deletePost = (req, res) => {
-    const { post_id } = req.params;
-
-    const query = `DELETE FROM posts WHERE id = ?`;
-    db.query(query, [post_id], (err, result) => {
+// Approve a success story (admin only)
+exports.approveSuccessStory = (req, res) => {
+    const { id } = req.params;
+    
+    const query = `
+        UPDATE success_stories
+        SET is_approved = true
+        WHERE id = ?
+    `;
+    
+    db.query(query, [id], (err, result) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Post deleted successfully' });
-    });
-};
-
-// Delete a comment
-exports.deleteComment = (req, res) => {
-    const { comment_id } = req.params;
-
-    const query = `DELETE FROM comments WHERE id = ?`;
-    db.query(query, [comment_id], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Comment deleted successfully' });
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Story not found' });
+        }
+        
+        res.json({ message: 'Success story approved' });
     });
 };

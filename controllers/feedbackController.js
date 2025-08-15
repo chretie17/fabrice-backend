@@ -12,8 +12,8 @@ const transporter = nodemailer.createTransport({
 });
 
 // Generate Professional Email Template for feedback
-function generateFeedbackEmailHTML(tenantDetails, feedbackDetails) {
-  const { tenant_name, service_type, floors, room_numbers } = tenantDetails;
+function generateFeedbackEmailHTML(studentDetails, feedbackDetails) {
+  const { student_name, service_type, floors, room_numbers } = studentDetails;
   const { rating, comments } = feedbackDetails;
 
   return `
@@ -25,7 +25,7 @@ function generateFeedbackEmailHTML(tenantDetails, feedbackDetails) {
   <body>
       <div>
           <h1>Feedback Confirmation</h1>
-          <p>Dear ${tenant_name},</p>
+          <p>Dear ${student_name},</p>
           <p>Thank you for your feedback regarding the service request. Below are the details of your feedback:</p>
           
           <div>
@@ -67,49 +67,49 @@ exports.handleFeedback = async (req, res) => {
             return res.status(404).json({ message: 'Service not found for the provided serviceId.' });
         }
 
-        // Step 2: Check if feedback already exists for this service and tenant
+        // Step 2: Check if feedback already exists for this service and student
         const [feedbackResult] = await db.promise().query(
-            `SELECT * FROM feedback WHERE service_id = ? AND tenant_id = ?;`,
+            `SELECT * FROM feedback WHERE service_id = ? AND student_id = ?;`,
             [service_id, userId]
         );
-        console.log(`Feedback check result: ${feedbackResult.length} feedback(s) found for tenantId=${userId} and serviceId=${service_id}`);
+        console.log(`Feedback check result: ${feedbackResult.length} feedback(s) found for studentId=${userId} and serviceId=${service_id}`);
 
         if (feedbackResult.length > 0) {
-            console.log('Feedback already provided for this service by this tenant');
+            console.log('Feedback already provided for this service by this student');
             return res.status(400).json({ message: 'You have already provided feedback for this service.' });
         }
 
         // Step 3: Insert Feedback Data into Database
         await db.promise().query(
-            `INSERT INTO feedback (service_id, tenant_id, rating, comments)
+            `INSERT INTO feedback (service_id, student_id, rating, comments)
             VALUES (?, ?, ?, ?);`,
             [service_id, userId, rating, comments]
         );
         console.log('Feedback data inserted into database');
 
-        // Step 4: Fetch Tenant Details
-        const [tenantResult] = await db.promise().query(
-            `SELECT name AS tenant_name, email FROM users WHERE id = ?;`,
+        // Step 4: Fetch student Details
+        const [studentResult] = await db.promise().query(
+            `SELECT name AS student_name, email FROM users WHERE id = ?;`,
             [userId]
         );
-        console.log(`Tenant details fetched: ${tenantResult.length} tenant(s) found for id=${userId}`);
+        console.log(`student details fetched: ${studentResult.length} student(s) found for id=${userId}`);
 
-        if (tenantResult.length === 0) {
-            console.log('Tenant not found');
-            return res.status(404).json({ message: 'Tenant not found' });
+        if (studentResult.length === 0) {
+            console.log('student not found');
+            return res.status(404).json({ message: 'student not found' });
         }
 
-        const tenantDetails = tenantResult[0];
+        const studentDetails = studentResult[0];
         const feedbackDetails = { rating, comments };
 
         // Generate Email Content
-        const emailHTML = generateFeedbackEmailHTML(tenantDetails, feedbackDetails);
+        const emailHTML = generateFeedbackEmailHTML(studentDetails, feedbackDetails);
         console.log('Generated email HTML for feedback confirmation');
 
-        // Step 5: Send Confirmation Email to Tenant
+        // Step 5: Send Confirmation Email to student
         const mailOptions = {
             from: process.env.EMAIL_USER, // Sender email from environment variable
-            to: tenantDetails.email,      // Tenant's email fetched from database
+            to: studentDetails.email,      // student's email fetched from database
             subject: 'Feedback Confirmation',
             html: emailHTML,
         };
@@ -130,36 +130,36 @@ exports.handleFeedback = async (req, res) => {
     }
 };
 
-// Route for fetching services by tenantId
-exports.getServicesByTenant = (req, res) => {
-    const { tenantId } = req.params; // Get tenantId from URL params
-    console.log(`Fetching services for tenantId=${tenantId}`);
+// Route for fetching services by studentId
+exports.getServicesBystudent = (req, res) => {
+    const { studentId } = req.params; // Get studentId from URL params
+    console.log(`Fetching services for studentId=${studentId}`);
 
     const query = `
       SELECT s.id, s.service_type,s.status, s.floors, s.room_numbers
       FROM services s
-      WHERE s.tenant_id = ?;
+      WHERE s.student_id = ?;
     `;
 
-    db.query(query, [tenantId], (err, services) => {
+    db.query(query, [studentId], (err, services) => {
         if (err) {
             console.error('Error fetching services:', err);
             return res.status(500).json({ message: 'Error fetching services', error: err });
         }
 
-        console.log(`Found ${services.length} service(s) for tenantId=${tenantId}`);
+        console.log(`Found ${services.length} service(s) for studentId=${studentId}`);
         if (services.length === 0) {
-            return res.status(404).json({ message: 'No services found for this tenant.' });
+            return res.status(404).json({ message: 'No services found for this student.' });
         }
 
-        res.status(200).json(services); // Return services requested by the tenant
+        res.status(200).json(services); // Return services requested by the student
     });
 };
 exports.getAllFeedbacks = (req, res) => {
     const query = `
-      SELECT f.id, f.service_id, f.tenant_id, f.rating, f.comments,f.created_at, f.response, u.name AS tenant_name, s.service_type
+      SELECT f.id, f.service_id, f.student_id, f.rating, f.comments,f.created_at, f.response, u.name AS student_name, s.service_type
       FROM feedback f
-      JOIN users u ON f.tenant_id = u.id
+      JOIN users u ON f.student_id = u.id
       JOIN services s ON f.service_id = s.id;
     `;
     
@@ -205,7 +205,7 @@ exports.getAllFeedbacks = (req, res) => {
       SELECT f.id, f.service_id, f.rating, f.comments, f.response, s.service_type
       FROM feedback f
       JOIN services s ON f.service_id = s.id
-      WHERE f.tenant_id = ?;
+      WHERE f.student_id = ?;
     `;
     
     db.query(query, [userId], (err, feedbacks) => {
