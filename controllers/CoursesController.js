@@ -418,3 +418,168 @@ exports.getStudentAssignmentSubmissions = (req, res) => {
         res.json(results[0] || null);
     });
 };
+// Add this method to your existing CoursesController.js file
+
+// Get Student's Assignment Submission
+exports.getStudentAssignmentSubmissions = (req, res) => {
+    const { student_id, assignment_id } = req.params;
+    
+    const query = `
+        SELECT asub.*, a.max_points, a.title as assignment_title
+        FROM assignment_submissions asub
+        JOIN assignments a ON asub.assignment_id = a.id
+        WHERE asub.student_id = ? AND asub.assignment_id = ?
+        ORDER BY asub.submitted_date DESC
+        LIMIT 1
+    `;
+    
+    db.query(query, [student_id, assignment_id], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results[0] || null);
+    });
+};
+
+// Enhanced Submit Assignment (handles both new submissions and updates)
+exports.submitAssignment = (req, res) => {
+    const { student_id, assignment_id, submission_text, file_path } = req.body;
+    
+    if (!student_id || !assignment_id) {
+        return res.status(400).json({ error: 'Student ID and Assignment ID are required' });
+    }
+    
+    // Check if submission already exists
+    const checkQuery = `SELECT id FROM assignment_submissions WHERE student_id = ? AND assignment_id = ?`;
+    
+    db.query(checkQuery, [student_id, assignment_id], (err, existing) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (existing.length > 0) {
+            // Update existing submission
+            const updateQuery = `
+                UPDATE assignment_submissions 
+                SET submission_text = ?, file_path = ?, submitted_date = NOW(),
+                    score = NULL, feedback = NULL, graded_date = NULL
+                WHERE student_id = ? AND assignment_id = ?
+            `;
+            
+            db.query(updateQuery, [submission_text, file_path, student_id, assignment_id], (err, result) => {
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({ 
+                    message: 'Assignment updated successfully',
+                    submissionId: existing[0].id,
+                    isUpdate: true 
+                });
+            });
+        } else {
+            // Create new submission
+            const insertQuery = `
+                INSERT INTO assignment_submissions (student_id, assignment_id, submission_text, file_path, submitted_date) 
+                VALUES (?, ?, ?, ?, NOW())
+            `;
+            
+            db.query(insertQuery, [student_id, assignment_id, submission_text, file_path], (err, result) => {
+                if (err) return res.status(500).json({ error: err.message });
+                res.json({ 
+                    message: 'Assignment submitted successfully',
+                    submissionId: result.insertId,
+                    isUpdate: false 
+                });
+            });
+        }
+    });
+};
+
+// Enhanced Get Student Progress (includes lesson titles)
+exports.getStudentProgress = (req, res) => {
+    const { student_id, course_id } = req.params;
+    
+    const query = `
+        SELECT 
+            l.id as lesson_id,
+            l.title as lesson_title,
+            l.lesson_order,
+            l.duration,
+            l.video_url,
+            sp.completed_date,
+            CASE WHEN sp.lesson_id IS NOT NULL THEN 1 ELSE 0 END as completed
+        FROM lessons l
+        LEFT JOIN student_progress sp ON l.id = sp.lesson_id AND sp.student_id = ?
+        WHERE l.course_id = ?
+        ORDER BY l.lesson_order ASC
+    `;
+    
+    db.query(query, [student_id, course_id], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+};
+
+exports.gradeSubmission = (req, res) => {
+    const { submission_id } = req.params;
+    const { score, feedback, graded_by } = req.body;
+    
+    // Format date for MySQL - remove milliseconds and timezone
+    const graded_date = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    
+    const query = `
+        UPDATE assignment_submissions 
+        SET 
+            score = ?,
+            feedback = ?,
+            graded_by = ?,
+            graded_date = ?
+        WHERE id = ?
+    `;
+    
+    db.query(query, [score, feedback, graded_by, graded_date, submission_id], (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+        
+        res.json({ 
+            message: 'Submission graded successfully',
+            submission_id: submission_id,
+            score: score
+        });
+    });
+};
+
+// Optional: Get grading details for a specific submission
+exports.getSubmissionGrade = (req, res) => {
+    const { submission_id } = req.params;
+    
+    const query = `
+        SELECT 
+            s.id,
+            s.score,
+            s.feedback,
+            s.graded_by,
+            s.graded_date,
+            s.submitted_date,
+            s.submission_text,
+            s.file_path,
+            u.first_name as student_first_name,
+            u.last_name as student_last_name,
+            a.title as assignment_title,
+            a.max_points,
+            i.first_name as grader_first_name,
+            i.last_name as grader_last_name
+        FROM assignment_submissions s
+        JOIN users u ON s.student_id = u.id
+        JOIN assignments a ON s.assignment_id = a.id
+        LEFT JOIN users i ON s.graded_by = i.id
+        WHERE s.id = ?
+    `;
+    
+    db.query(query, [submission_id], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (results.length === 0) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+        
+        res.json(results[0]);
+    });
+};

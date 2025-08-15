@@ -26,6 +26,9 @@ router.delete('/assignments/:assignment_id', coursesController.deleteAssignment)
 // Get Assignment Submissions
 router.get('/assignments/:assignment_id/submissions', coursesController.getAssignmentSubmissions);
 
+// **NEW ROUTE**: Get student's specific assignment submission
+router.get('/assignments/:assignment_id/student/:student_id', coursesController.getStudentAssignmentSubmissions);
+
 // ==================== PROGRESS ROUTES ====================
 // Mark lesson complete
 router.post('/progress/complete', coursesController.markLessonComplete);
@@ -39,5 +42,10 @@ router.get('/:course_id/progress-summary', coursesController.getCourseProgressSu
 // ==================== ASSIGNMENT SUBMISSION ROUTES ====================
 // Submit assignment
 router.post('/assignments/submit', coursesController.submitAssignment);
+// Single submission grading
+router.put('/assignments/submissions/:submission_id/grade', coursesController.gradeSubmission);
+
+// Get grading details (optional)
+router.get('/assignments/submissions/:submission_id/grade', coursesController.getSubmissionGrade);
 
 module.exports = router;

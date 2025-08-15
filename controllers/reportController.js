@@ -8,6 +8,45 @@ const validateDateRange = (startDate, endDate) => {
   return start <= end;
 };
 
+// Helper: Process Forum Data to group posts under topics
+const processForumData = (sqlResults) => {
+  const topicsMap = new Map();
+  
+  sqlResults.forEach(row => {
+    const topicId = row.topic_id;
+    
+    // If topic doesn't exist in map, create it
+    if (!topicsMap.has(topicId)) {
+      topicsMap.set(topicId, {
+        topic_id: row.topic_id,
+        topic_title: row.topic_title,
+        topic_description: row.topic_description,
+        topic_created_at: row.topic_created_at,
+        topic_status: row.topic_status,
+        topic_priority: row.topic_priority,
+        topic_creator: row.topic_creator,
+        posts: []
+      });
+    }
+    
+    // Add post to topic if post exists (not null)
+    if (row.post_id) {
+      topicsMap.get(topicId).posts.push({
+        post_id: row.post_id,
+        post_content: row.post_content,
+        post_created_at: row.post_created_at,
+        post_visibility: row.post_visibility,
+        post_author: row.post_author
+      });
+    }
+  });
+  
+  // Convert map to array and sort by topic creation date (newest first)
+  return Array.from(topicsMap.values()).sort((a, b) => 
+    new Date(b.topic_created_at) - new Date(a.topic_created_at)
+  );
+};
+
 // Generate Reports
 exports.generateReport = async (req, res) => {
   const { start_date, end_date, type = 'full', category } = req.query;
@@ -38,73 +77,52 @@ exports.generateReport = async (req, res) => {
       `,
       responses: `
         SELECT 
-  responses.id AS response_id,
-  surveys.title AS survey_title,
-  users.name AS respondent_name,
-  responses.responses,
-  DATE_FORMAT(responses.submitted_at, '%Y-%m-%d %H:%i:%s') AS submitted_at,
-  DATE_FORMAT(responses.response_date, '%Y-%m-%d %H:%i:%s') AS response_date -- Use response_date here
-FROM responses
-LEFT JOIN surveys ON responses.survey_id = surveys.id
-LEFT JOIN users ON responses.user_id = users.id
-${type === 'date_range' ? 'WHERE responses.response_date >= ? AND responses.response_date <= ?' : ''} -- Adjust filtering here
-ORDER BY responses.response_date DESC; -- Use response_date for ordering
-
-      `,
-      services: `
-        SELECT 
-          services.id AS service_id,
-          services.service_type,
-          services.description,
-          services.priority,
-          services.status,
-          users.name AS tenant_name,
-          services.floors,
-          services.room_numbers,
-          DATE_FORMAT(services.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
-        FROM services
-        LEFT JOIN users ON services.tenant_id = users.id
-        ${type === 'date_range' ? 'WHERE services.created_at >= ? AND services.created_at <= ?' : ''}
-        ORDER BY services.created_at DESC;
+          responses.id AS response_id,
+          surveys.title AS survey_title,
+          users.name AS respondent_name,
+          responses.responses,
+          DATE_FORMAT(responses.submitted_at, '%Y-%m-%d %H:%i:%s') AS submitted_at,
+          DATE_FORMAT(responses.response_date, '%Y-%m-%d %H:%i:%s') AS response_date
+        FROM responses
+        LEFT JOIN surveys ON responses.survey_id = surveys.id
+        LEFT JOIN users ON responses.user_id = users.id
+        ${type === 'date_range' ? 'WHERE responses.response_date >= ? AND responses.response_date <= ?' : ''}
+        ORDER BY responses.response_date DESC;
       `,
       feedback: `
         SELECT 
           feedback.id AS feedback_id,
-          users.name AS tenant_name,
-          services.service_type,
+          users.name AS student_name,
+          courses.name,
           feedback.comments,
           feedback.response AS admin_response,
           DATE_FORMAT(feedback.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
         FROM feedback
-        LEFT JOIN users ON feedback.tenant_id = users.id
-        LEFT JOIN services ON feedback.service_id = services.id
+        LEFT JOIN users ON feedback.student_id = users.id
+        LEFT JOIN courses ON feedback.course_id = courses.id
         ${type === 'date_range' ? 'WHERE feedback.created_at >= ? AND feedback.created_at <= ?' : ''}
         ORDER BY feedback.created_at DESC;
       `,
       posts: `
         SELECT 
-          posts.id AS post_id,
-          posts.title,
-          users.name AS tenant_name,
-          DATE_FORMAT(posts.created_at, '%Y-%m-%d %H:%i:%s') AS created_at,
-          posts.status
-        FROM posts
-        LEFT JOIN users ON posts.tenant_id = users.id
-        ${type === 'date_range' ? 'WHERE posts.created_at >= ? AND posts.created_at <= ?' : ''}
-        ORDER BY posts.created_at DESC;
-      `,
-      comments: `
-        SELECT 
-          comments.id AS comment_id,
-          comments.content,
-          users.name AS tenant_name,
-          posts.title AS post_title,
-          DATE_FORMAT(comments.created_at, '%Y-%m-%d %H:%i:%s') AS created_at
-        FROM comments
-        LEFT JOIN posts ON comments.post_id = posts.id
-        LEFT JOIN users ON comments.tenant_id = users.id
-        ${type === 'date_range' ? 'WHERE comments.created_at >= ? AND comments.created_at <= ?' : ''}
-        ORDER BY comments.created_at DESC;
+          t.id AS topic_id,
+          t.title AS topic_title,
+          t.description AS topic_description,
+          DATE_FORMAT(t.created_at, '%Y-%m-%d %H:%i:%s') AS topic_created_at,
+          t.status AS topic_status,
+          CASE WHEN t.is_pinned = 1 THEN 'pinned' ELSE 'normal' END AS topic_priority,
+          creator.name AS topic_creator,
+          p.id AS post_id,
+          p.content AS post_content,
+          DATE_FORMAT(p.created_at, '%Y-%m-%d %H:%i:%s') AS post_created_at,
+          CASE WHEN p.is_hidden = 1 THEN 'hidden' ELSE 'visible' END AS post_visibility,
+          poster.name AS post_author
+        FROM forum_topics t
+        LEFT JOIN forum_posts p ON t.id = p.topic_id
+        LEFT JOIN users creator ON t.created_by = creator.id
+        LEFT JOIN users poster ON p.user_id = poster.id
+        ${type === 'date_range' ? 'WHERE t.created_at >= ? AND t.created_at <= ?' : ''}
+        ORDER BY t.created_at DESC, p.created_at ASC;
       `,
     };
 
@@ -118,15 +136,23 @@ ORDER BY responses.response_date DESC; -- Use response_date for ordering
     const [results] = await db.promise().query(queries[category], params);
 
     if (!results.length) {
-      return res.status(404).json({ message: 'No data found for the specified date range and category.' });
+      return res.status(200).json({ 
+        message: 'No data available for the specified category.',
+        [category]: []
+      });
     }
-    if (!results.length) {
-        return res.status(200).json({ message: 'No data available for the specified date range and category.' });
-      }
+
+    // Process results based on category
+    let processedResults = results;
+    
+    // Special processing for posts to group them under topics
+    if (category === 'posts') {
+      processedResults = processForumData(results);
+    }
 
     // Respond with the Report Data
     res.status(200).json({
-      [category]: results,
+      [category]: processedResults,
     });
   } catch (error) {
     console.error('Error generating report:', error);
