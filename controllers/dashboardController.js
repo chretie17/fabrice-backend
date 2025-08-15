@@ -6,10 +6,11 @@ exports.getDashboardData = async (req, res) => {
         const { year } = req.query;
 
         // Fetch Post Count by Status for the given year
-        const [postStatus] = await db.promise().query(
-            'SELECT status, COUNT(*) AS post_count FROM posts WHERE YEAR(posts.created_at) = ? GROUP BY status',
-            [year]
-        );
+       const [postStatus] = await db.promise().query(
+    'SELECT is_hidden, COUNT(*) AS post_count FROM forum_posts WHERE YEAR(created_at) = ? GROUP BY is_hidden',
+    [year]
+);
+
 
         // Fetch Comment Count for the given year
         const [commentCount] = await db.promise().query(
@@ -17,28 +18,28 @@ exports.getDashboardData = async (req, res) => {
             [year]
         );
 
-        // Fetch Tenant Engagement (Feedback & Comment Counts) for the given year
-        const [tenantEngagement] = await db.promise().query(
-            `SELECT u.name AS tenant_name, 
+        // Fetch student Engagement (Feedback & Comment Counts) for the given year
+        const [studentEngagement] = await db.promise().query(
+            `SELECT u.name AS student_name, 
                     COUNT(DISTINCT f.id) AS feedback_count, 
                     COUNT(DISTINCT c.id) AS comment_count
              FROM users u
-             LEFT JOIN feedback f ON u.id = f.tenant_id AND YEAR(f.created_at) = ?
-             LEFT JOIN comments c ON u.id = c.tenant_id AND YEAR(c.created_at) = ?
+             LEFT JOIN feedback f ON u.id = f.student_id AND YEAR(f.created_at) = ?
+             LEFT JOIN comments c ON u.id = c.student_id AND YEAR(c.created_at) = ?
              GROUP BY u.id`,
             [year, year]
         );
 
-        // Fetch Top 5 Tenants by Engagement (Posts, Feedbacks, and Comments) for the given year
+        // Fetch Top 5 students by Engagement (Posts, Feedbacks, and Comments) for the given year
         const [topEngagement] = await db.promise().query(
-            `SELECT u.name AS tenant_name, 
+            `SELECT u.name AS student_name, 
                     COUNT(DISTINCT p.id) AS post_count, 
                     COUNT(DISTINCT f.id) AS feedback_count, 
                     COUNT(DISTINCT c.id) AS comment_count
              FROM users u
-             LEFT JOIN posts p ON u.id = p.tenant_id AND YEAR(p.created_at) = ?
-             LEFT JOIN feedback f ON u.id = f.tenant_id AND YEAR(f.created_at) = ?
-             LEFT JOIN comments c ON u.id = c.tenant_id AND YEAR(c.created_at) = ?
+             LEFT JOIN forum_posts p ON u.id = p.user_id AND YEAR(p.created_at) = ?
+             LEFT JOIN feedback f ON u.id = f.student_id AND YEAR(f.created_at) = ?
+             LEFT JOIN comments c ON u.id = c.student_id AND YEAR(c.created_at) = ?
              GROUP BY u.id
              ORDER BY post_count DESC, feedback_count DESC, comment_count DESC
              LIMIT 5`,
@@ -49,7 +50,7 @@ exports.getDashboardData = async (req, res) => {
         res.json({
             postStatus,
             commentCount,
-            tenantEngagement,
+            studentEngagement,
             topEngagement,
         });
     } catch (err) {

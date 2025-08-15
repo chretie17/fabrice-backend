@@ -1,21 +1,14 @@
+// routes/feedback.js
 const express = require('express');
 const router = express.Router();
-const feedbackSurveyController = require('../controllers/feedbackController');
+const feedback = require('../controllers/feedbackController');
 
-// Feedback Routes
+router.post('/', feedback.handleFeedback);
+router.get('/', feedback.getAllFeedbacks);
+router.put('/:feedbackId/respond', feedback.respondToFeedback);
+router.get('/user/:userId', feedback.getUserFeedbacks);
 
-// Route to handle feedback submission
-router.post('/', feedbackSurveyController.handleFeedback); // Submit Feedback (POST)
-
-// Route to get services requested by a specific student (GET by studentId)
-router.get('/:studentId', feedbackSurveyController.getServicesBystudent); // Get services requested by student
-
-// Admin routes
-router.get('/', feedbackSurveyController.getAllFeedbacks); // Get all feedbacks (admin)
-// Correcting the route to include the feedbackId
-router.post('/response/:feedbackId', feedbackSurveyController.respondToFeedback);
-
-router.get('/user/:userId', feedbackSurveyController.getUserFeedbacks); // Get feedback for specific user
-router.post('/feedback', feedbackSurveyController.handleFeedback); // Submit feedback
+// helpful for picker/dropdown of user’s courses
+router.get('/courses/student/:studentId', feedback.getCoursesByStudent);
 
 module.exports = router;
