@@ -1,4 +1,15 @@
 const db = require('../db');
+const nodemailer = require('nodemailer');
+
+
+// Configure email transporter (add this after the db require)
+const transporter = nodemailer.createTransport({
+    service: 'gmail', // or your email service
+    auth: {
+        user: process.env.EMAIL_USER, // your email
+        pass: process.env.EMAIL_PASSWORD // your email password or app password
+    }
+});
 
 // Get All Enrollments (updated with payment info)
 exports.getAllEnrollments = (req, res) => {
@@ -84,6 +95,7 @@ exports.submitPaymentProof = (req, res) => {
 };
 
 // Verify Payment (Admin function)
+// Verify Payment (Admin function)
 exports.verifyPayment = (req, res) => {
     const { enrollment_id, verified_by, action, notes } = req.body;
     
@@ -115,6 +127,66 @@ exports.verifyPayment = (req, res) => {
                     });
                 }
             });
+
+            // Get student and course details for email
+            const emailQuery = `
+                SELECT u.email, u.name as student_name, c.name as course_name, 
+                       b.name as batch_name, b.start_date, b.end_date, b.start_time, b.end_time
+                FROM enrollments e
+                JOIN users u ON e.student_id = u.id
+                JOIN batches b ON e.batch_id = b.id
+                JOIN courses c ON b.course_id = c.id
+                WHERE e.id = ?
+            `;
+            
+            db.query(emailQuery, [enrollment_id], (emailErr, emailResult) => {
+                if (!emailErr && emailResult.length > 0) {
+                    const student = emailResult[0];
+                    
+                    const mailOptions = {
+                        from: process.env.EMAIL_USER,
+                        to: student.email,
+                        subject: 'Payment Verified - Course Enrollment Confirmed',
+                        html: `
+                            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+                                <h2 style="color: #2563eb;">Payment Verified Successfully!</h2>
+                                
+                                <p>Dear ${student.student_name},</p>
+                                
+                                <p>Great news! Your payment has been verified and your enrollment is now confirmed.</p>
+                                
+                                <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                                    <h3 style="margin-top: 0; color: #374151;">Course Details:</h3>
+                                    <p><strong>Course:</strong> ${student.course_name}</p>
+                                    <p><strong>Batch:</strong> ${student.batch_name}</p>
+                                    <p><strong>Start Date:</strong> ${new Date(student.start_date).toLocaleDateString()}</p>
+                                    <p><strong>End Date:</strong> ${new Date(student.end_date).toLocaleDateString()}</p>
+                                    <p><strong>Time:</strong> ${student.start_time} - ${student.end_time}</p>
+                                </div>
+                                
+                                <p>You can now access your course materials and join the classes. Please log in to your account to get started.</p>
+                                
+                                ${notes ? `<div style="background-color: #fef3c7; padding: 15px; border-radius: 8px; margin: 20px 0;">
+                                    <p><strong>Admin Notes:</strong></p>
+                                    <p>${notes}</p>
+                                </div>` : ''}
+                                
+                                <p>If you have any questions, please don't hesitate to contact us.</p>
+                                
+                                <p>Best regards,<br>Your Learning Team</p>
+                            </div>
+                        `
+                    };
+                    
+                    transporter.sendMail(mailOptions, (mailErr, info) => {
+                        if (mailErr) {
+                            console.error('Error sending email:', mailErr);
+                        } else {
+                            console.log('Verification email sent:', info.response);
+                        }
+                    });
+                }
+            });
         }
         
         res.json({ message: `Payment ${action === 'verify' ? 'verified' : 'rejected'} successfully` });
@@ -122,14 +194,18 @@ exports.verifyPayment = (req, res) => {
 };
 
 // Get Student's Enrollments (updated with payment info)
+// Get Student's Enrollments (updated with payment info)
+// In your enrollments controller
 exports.getStudentEnrollments = (req, res) => {
     const { student_id } = req.params;
     const query = `
-        SELECT e.*, b.name as batch_name, c.name as course_name, c.price,
-               b.start_date, b.end_date
+        SELECT e.*, b.name as batch_name, c.name as course_name, c.id as course_id, c.price,
+               b.start_date, b.end_date, b.start_time, b.end_time, b.max_students,
+               u.name as instructor_name
         FROM enrollments e
         JOIN batches b ON e.batch_id = b.id
         JOIN courses c ON b.course_id = c.id
+        JOIN users u ON b.instructor_id = u.id
         WHERE e.student_id = ?
         ORDER BY e.enrolled_date DESC
     `;

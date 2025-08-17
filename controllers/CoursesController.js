@@ -1,4 +1,5 @@
 const db = require('../db');
+const emailService = require('./Email'); // Import the email service
 
 // ==================== COURSES ====================
 
@@ -288,6 +289,8 @@ exports.getStudentProgress = (req, res) => {
             l.id as lesson_id,
             l.title as lesson_title,
             l.lesson_order,
+            l.duration,
+            l.video_url,
             sp.completed_date,
             CASE WHEN sp.lesson_id IS NOT NULL THEN 1 ELSE 0 END as completed
         FROM lessons l
@@ -331,28 +334,108 @@ exports.getCourseProgressSummary = (req, res) => {
 
 // ==================== ASSIGNMENT SUBMISSIONS ====================
 
-// Submit Assignment
-exports.submitAssignment = (req, res) => {
+// Enhanced Submit Assignment with Email Notification
+exports.submitAssignment = async (req, res) => {
     const { student_id, assignment_id, submission_text, file_path } = req.body;
     
     if (!student_id || !assignment_id) {
         return res.status(400).json({ error: 'Student ID and Assignment ID are required' });
     }
     
-    const query = `
-        INSERT INTO assignment_submissions (student_id, assignment_id, submission_text, file_path, submitted_date) 
-        VALUES (?, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE 
-        submission_text = VALUES(submission_text),
-        file_path = VALUES(file_path),
-        submitted_date = NOW()
-    `;
+    // Check if submission already exists
+    const checkQuery = `SELECT id FROM assignment_submissions WHERE student_id = ? AND assignment_id = ?`;
     
-    db.query(query, [student_id, assignment_id, submission_text, file_path], (err, result) => {
+    db.query(checkQuery, [student_id, assignment_id], async (err, existing) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ message: 'Assignment submitted successfully' });
+        
+        const isUpdate = existing.length > 0;
+        let submissionId;
+        
+        if (isUpdate) {
+            // Update existing submission
+            const updateQuery = `
+                UPDATE assignment_submissions 
+                SET submission_text = ?, file_path = ?, submitted_date = NOW(),
+                    score = NULL, feedback = NULL, graded_date = NULL
+                WHERE student_id = ? AND assignment_id = ?
+            `;
+            
+            db.query(updateQuery, [submission_text, file_path, student_id, assignment_id], async (err, result) => {
+                if (err) return res.status(500).json({ error: err.message });
+                
+                submissionId = existing[0].id;
+                
+                // Send email confirmation
+                await sendSubmissionEmail(student_id, assignment_id, isUpdate);
+                
+                res.json({ 
+                    message: 'Assignment updated successfully',
+                    submissionId: submissionId,
+                    isUpdate: true 
+                });
+            });
+        } else {
+            // Create new submission
+            const insertQuery = `
+                INSERT INTO assignment_submissions (student_id, assignment_id, submission_text, file_path, submitted_date) 
+                VALUES (?, ?, ?, ?, NOW())
+            `;
+            
+            db.query(insertQuery, [student_id, assignment_id, submission_text, file_path], async (err, result) => {
+                if (err) return res.status(500).json({ error: err.message });
+                
+                submissionId = result.insertId;
+                
+                // Send email confirmation
+                await sendSubmissionEmail(student_id, assignment_id, isUpdate);
+                
+                res.json({ 
+                    message: 'Assignment submitted successfully',
+                    submissionId: submissionId,
+                    isUpdate: false 
+                });
+            });
+        }
     });
 };
+
+// Helper function to send submission confirmation email
+async function sendSubmissionEmail(student_id, assignment_id, isUpdate) {
+    try {
+        const query = `
+            SELECT 
+                u.name as student_name,
+                u.email as student_email,
+                a.title as assignment_title,
+                c.name as course_name
+            FROM users u
+            JOIN assignment_submissions asub ON u.id = asub.student_id
+            JOIN assignments a ON asub.assignment_id = a.id
+            JOIN courses c ON a.course_id = c.id
+            WHERE u.id = ? AND a.id = ?
+            LIMIT 1
+        `;
+        
+        db.query(query, [student_id, assignment_id], async (err, results) => {
+            if (err || results.length === 0) {
+                console.error('Error fetching submission details for email:', err);
+                return;
+            }
+            
+            const { student_name, student_email, assignment_title, course_name } = results[0];
+            
+            await emailService.sendSubmissionConfirmation(
+                student_email,
+                student_name,
+                assignment_title,
+                course_name,
+                isUpdate
+            );
+        });
+    } catch (error) {
+        console.error('Error sending submission confirmation email:', error);
+    }
+}
 
 // Get Assignment Submissions
 exports.getAssignmentSubmissions = (req, res) => {
@@ -372,6 +455,182 @@ exports.getAssignmentSubmissions = (req, res) => {
     db.query(query, [assignment_id], (err, results) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json(results);
+    });
+};
+
+// Get Student's Assignment Submission
+exports.getStudentAssignmentSubmissions = (req, res) => {
+    const { student_id, assignment_id } = req.params;
+    
+    const query = `
+        SELECT asub.*, a.max_points, a.title as assignment_title
+        FROM assignment_submissions asub
+        JOIN assignments a ON asub.assignment_id = a.id
+        WHERE asub.student_id = ? AND asub.assignment_id = ?
+        ORDER BY asub.submitted_date DESC
+        LIMIT 1
+    `;
+    
+    db.query(query, [student_id, assignment_id], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results[0] || null);
+    });
+};
+
+// Enhanced Grade Submission with Email Notification
+exports.gradeSubmission = async (req, res) => {
+    const { submission_id } = req.params;
+    const { score, feedback, graded_by } = req.body;
+    
+    if (!score && score !== 0) {
+        return res.status(400).json({ error: 'Score is required' });
+    }
+    
+    // Format date for MySQL
+    const graded_date = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    
+    const updateQuery = `
+        UPDATE assignment_submissions 
+        SET 
+            score = ?,
+            feedback = ?,
+            graded_by = ?,
+            graded_date = ?
+        WHERE id = ?
+    `;
+    
+    db.query(updateQuery, [score, feedback, graded_by, graded_date, submission_id], async (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+        
+        // Send grade notification email
+        try {
+            await sendGradeNotificationEmail(submission_id, score, feedback, graded_by);
+        } catch (emailError) {
+            console.error('Error sending grade notification email:', emailError);
+            // Don't fail the grading process if email fails
+        }
+        
+        res.json({ 
+            message: 'Submission graded successfully',
+            submission_id: submission_id,
+            score: score
+        });
+    });
+};
+
+// Helper function to send grade notification email
+async function sendGradeNotificationEmail(submission_id, score, feedback, graded_by) {
+    try {
+        const query = `
+            SELECT 
+                u.name as student_name,
+                u.email as student_email,
+                a.title as assignment_title,
+                a.max_points,
+                c.name as course_name,
+                grader.name as grader_name
+            FROM assignment_submissions asub
+            JOIN users u ON asub.student_id = u.id
+            JOIN assignments a ON asub.assignment_id = a.id
+            JOIN courses c ON a.course_id = c.id
+            LEFT JOIN users grader ON asub.graded_by = grader.id
+            WHERE asub.id = ?
+        `;
+        
+        db.query(query, [submission_id], async (err, results) => {
+            if (err || results.length === 0) {
+                console.error('Error fetching grade details for email:', err);
+                return;
+            }
+            
+            const { 
+                student_name, 
+                student_email, 
+                assignment_title, 
+                max_points, 
+                course_name, 
+                grader_name 
+            } = results[0];
+            
+            await emailService.sendGradeNotification(
+                student_email,
+                student_name,
+                assignment_title,
+                course_name,
+                score,
+                max_points,
+                feedback,
+                grader_name || 'Instructor'
+            );
+        });
+    } catch (error) {
+        console.error('Error in sendGradeNotificationEmail:', error);
+        throw error;
+    }
+}
+
+// Get Submission Grade Details
+exports.getSubmissionGrade = (req, res) => {
+    const { submission_id } = req.params;
+    
+    const query = `
+        SELECT 
+            s.id,
+            s.score,
+            s.feedback,
+            s.graded_by,
+            s.graded_date,
+            s.submitted_date,
+            s.submission_text,
+            s.file_path,
+            u.name as student_name,
+            u.email as student_email,
+            a.title as assignment_title,
+            a.max_points,
+            c.name as course_name,
+            grader.name as grader_name
+        FROM assignment_submissions s
+        JOIN users u ON s.student_id = u.id
+        JOIN assignments a ON s.assignment_id = a.id
+        JOIN courses c ON a.course_id = c.id
+        LEFT JOIN users grader ON s.graded_by = grader.id
+        WHERE s.id = ?
+    `;
+    
+    db.query(query, [submission_id], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (results.length === 0) {
+            return res.status(404).json({ error: 'Submission not found' });
+        }
+        
+        res.json(results[0]);
+    });
+};
+
+// Get Assignment by ID
+exports.getAssignmentById = (req, res) => {
+    const { assignment_id } = req.params;
+    
+    const query = `
+        SELECT a.*, c.name as course_name, c.id as course_id
+        FROM assignments a
+        JOIN courses c ON a.course_id = c.id
+        WHERE a.id = ?
+    `;
+    
+    db.query(query, [assignment_id], (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        
+        if (results.length === 0) {
+            return res.status(404).json({ error: 'Assignment not found' });
+        }
+        
+        res.json(results[0]);
     });
 };
 
@@ -404,182 +663,76 @@ exports.getCourseStats = (req, res) => {
         res.json(results[0]);
     });
 };
-// In your courses controller, add this method:
-exports.getStudentAssignmentSubmissions = (req, res) => {
-    const { student_id, assignment_id } = req.params;
-    
-    const query = `
-        SELECT * FROM assignment_submissions 
-        WHERE student_id = ? AND assignment_id = ?
-    `;
-    
-    db.query(query, [student_id, assignment_id], (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(results[0] || null);
-    });
-};
-// Add this method to your existing CoursesController.js file
 
-// Get Student's Assignment Submission
-exports.getStudentAssignmentSubmissions = (req, res) => {
-    const { student_id, assignment_id } = req.params;
-    
-    const query = `
-        SELECT asub.*, a.max_points, a.title as assignment_title
-        FROM assignment_submissions asub
-        JOIN assignments a ON asub.assignment_id = a.id
-        WHERE asub.student_id = ? AND asub.assignment_id = ?
-        ORDER BY asub.submitted_date DESC
-        LIMIT 1
-    `;
-    
-    db.query(query, [student_id, assignment_id], (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(results[0] || null);
-    });
-};
 
-// Enhanced Submit Assignment (handles both new submissions and updates)
-exports.submitAssignment = (req, res) => {
-    const { student_id, assignment_id, submission_text, file_path } = req.body;
+// ==================== BULK EMAIL OPERATIONS ====================
+
+// Send bulk grade notifications (for batch operations)
+exports.sendBulkGradeNotifications = async (req, res) => {
+    const { submission_ids } = req.body;
     
-    if (!student_id || !assignment_id) {
-        return res.status(400).json({ error: 'Student ID and Assignment ID are required' });
+    if (!submission_ids || !Array.isArray(submission_ids)) {
+        return res.status(400).json({ error: 'Submission IDs array is required' });
     }
     
-    // Check if submission already exists
-    const checkQuery = `SELECT id FROM assignment_submissions WHERE student_id = ? AND assignment_id = ?`;
+    const results = {
+        success: 0,
+        failed: 0,
+        errors: []
+    };
     
-    db.query(checkQuery, [student_id, assignment_id], (err, existing) => {
-        if (err) return res.status(500).json({ error: err.message });
-        
-        if (existing.length > 0) {
-            // Update existing submission
-            const updateQuery = `
-                UPDATE assignment_submissions 
-                SET submission_text = ?, file_path = ?, submitted_date = NOW(),
-                    score = NULL, feedback = NULL, graded_date = NULL
-                WHERE student_id = ? AND assignment_id = ?
+    for (const submission_id of submission_ids) {
+        try {
+            // Get submission details
+            const query = `
+                SELECT 
+                    asub.score,
+                    asub.feedback,
+                    asub.graded_by,
+                    u.name as student_name,
+                    u.email as student_email,
+                    a.title as assignment_title,
+                    a.max_points,
+                    c.name as course_name,
+                    grader.name as grader_name
+                FROM assignment_submissions asub
+                JOIN users u ON asub.student_id = u.id
+                JOIN assignments a ON asub.assignment_id = a.id
+                JOIN courses c ON a.course_id = c.id
+                LEFT JOIN users grader ON asub.graded_by = grader.id
+                WHERE asub.id = ? AND asub.score IS NOT NULL
             `;
             
-            db.query(updateQuery, [submission_text, file_path, student_id, assignment_id], (err, result) => {
-                if (err) return res.status(500).json({ error: err.message });
-                res.json({ 
-                    message: 'Assignment updated successfully',
-                    submissionId: existing[0].id,
-                    isUpdate: true 
-                });
+            db.query(query, [submission_id], async (err, submissionResults) => {
+                if (err || submissionResults.length === 0) {
+                    results.failed++;
+                    results.errors.push(`Submission ${submission_id}: No graded submission found`);
+                    return;
+                }
+                
+                const submission = submissionResults[0];
+                
+                await emailService.sendGradeNotification(
+                    submission.student_email,
+                    submission.student_name,
+                    submission.assignment_title,
+                    submission.course_name,
+                    submission.score,
+                    submission.max_points,
+                    submission.feedback,
+                    submission.grader_name || 'Instructor'
+                );
+                
+                results.success++;
             });
-        } else {
-            // Create new submission
-            const insertQuery = `
-                INSERT INTO assignment_submissions (student_id, assignment_id, submission_text, file_path, submitted_date) 
-                VALUES (?, ?, ?, ?, NOW())
-            `;
-            
-            db.query(insertQuery, [student_id, assignment_id, submission_text, file_path], (err, result) => {
-                if (err) return res.status(500).json({ error: err.message });
-                res.json({ 
-                    message: 'Assignment submitted successfully',
-                    submissionId: result.insertId,
-                    isUpdate: false 
-                });
-            });
+        } catch (error) {
+            results.failed++;
+            results.errors.push(`Submission ${submission_id}: ${error.message}`);
         }
-    });
-};
-
-// Enhanced Get Student Progress (includes lesson titles)
-exports.getStudentProgress = (req, res) => {
-    const { student_id, course_id } = req.params;
+    }
     
-    const query = `
-        SELECT 
-            l.id as lesson_id,
-            l.title as lesson_title,
-            l.lesson_order,
-            l.duration,
-            l.video_url,
-            sp.completed_date,
-            CASE WHEN sp.lesson_id IS NOT NULL THEN 1 ELSE 0 END as completed
-        FROM lessons l
-        LEFT JOIN student_progress sp ON l.id = sp.lesson_id AND sp.student_id = ?
-        WHERE l.course_id = ?
-        ORDER BY l.lesson_order ASC
-    `;
-    
-    db.query(query, [student_id, course_id], (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json(results);
-    });
-};
-
-exports.gradeSubmission = (req, res) => {
-    const { submission_id } = req.params;
-    const { score, feedback, graded_by } = req.body;
-    
-    // Format date for MySQL - remove milliseconds and timezone
-    const graded_date = new Date().toISOString().slice(0, 19).replace('T', ' ');
-    
-    const query = `
-        UPDATE assignment_submissions 
-        SET 
-            score = ?,
-            feedback = ?,
-            graded_by = ?,
-            graded_date = ?
-        WHERE id = ?
-    `;
-    
-    db.query(query, [score, feedback, graded_by, graded_date, submission_id], (err, result) => {
-        if (err) return res.status(500).json({ error: err.message });
-        
-        if (result.affectedRows === 0) {
-            return res.status(404).json({ error: 'Submission not found' });
-        }
-        
-        res.json({ 
-            message: 'Submission graded successfully',
-            submission_id: submission_id,
-            score: score
-        });
-    });
-};
-
-// Optional: Get grading details for a specific submission
-exports.getSubmissionGrade = (req, res) => {
-    const { submission_id } = req.params;
-    
-    const query = `
-        SELECT 
-            s.id,
-            s.score,
-            s.feedback,
-            s.graded_by,
-            s.graded_date,
-            s.submitted_date,
-            s.submission_text,
-            s.file_path,
-            u.first_name as student_first_name,
-            u.last_name as student_last_name,
-            a.title as assignment_title,
-            a.max_points,
-            i.first_name as grader_first_name,
-            i.last_name as grader_last_name
-        FROM assignment_submissions s
-        JOIN users u ON s.student_id = u.id
-        JOIN assignments a ON s.assignment_id = a.id
-        LEFT JOIN users i ON s.graded_by = i.id
-        WHERE s.id = ?
-    `;
-    
-    db.query(query, [submission_id], (err, results) => {
-        if (err) return res.status(500).json({ error: err.message });
-        
-        if (results.length === 0) {
-            return res.status(404).json({ error: 'Submission not found' });
-        }
-        
-        res.json(results[0]);
+    res.json({
+        message: `Bulk email operation completed`,
+        results: results
     });
 };

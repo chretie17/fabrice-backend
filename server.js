@@ -1,7 +1,8 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-
+require('dotenv').config();
+// ... rest of your imports
 const usersRoutes = require('./routes/users');
 const feedbackRoutes = require('./routes/feedback');
 const notificationsRoutes = require('./routes/notificationsRoutes');
@@ -36,6 +37,7 @@ app.use('/api/courses', courseRoutes);
 app.use('/api/batches', batchRoutes);
 app.use('/api/enrollments', enrollmentRoutes);
 app.use('/api/attendance', attendanceRoutes);
+app.use('/api/files', require('./routes/file'));
 app.use('/api/', CommunityForumRoutes);
 app.use('/api/admin', AdminPostRoutes);
 

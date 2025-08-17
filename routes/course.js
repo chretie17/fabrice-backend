@@ -25,6 +25,8 @@ router.delete('/assignments/:assignment_id', coursesController.deleteAssignment)
 
 // Get Assignment Submissions
 router.get('/assignments/:assignment_id/submissions', coursesController.getAssignmentSubmissions);
+// Add this line with your other assignment routes
+router.get('/assignments/:assignment_id', coursesController.getAssignmentById);
 
 // **NEW ROUTE**: Get student's specific assignment submission
 router.get('/assignments/:assignment_id/student/:student_id', coursesController.getStudentAssignmentSubmissions);
